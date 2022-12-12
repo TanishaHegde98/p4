@@ -2,19 +2,22 @@ CC     := gcc
 CFLAGS := -Wall -Werror 
 
 SRCS   := client.c \
-	server.c 
+	server.c main.c
 
 OBJS   := ${SRCS:c=o}
 PROGS  := ${SRCS:.c=}
 
 .PHONY: all
-all: ${PROGS} libmfs.so libmfs.o
+sharedlib: libmfs.so libmfs.o ${PROG}
+
+all: ${PROGS}
 
 ${PROGS} : % : %.o Makefile
-	${CC} $< -o $@ udp.c
+	${CC} $< -o $@ udp.c libmfs.c
 
 clean:
 	rm -f ${PROGS} ${OBJS}
+
 
 %.o: %.c Makefile
 	${CC} ${CFLAGS} -c $<
