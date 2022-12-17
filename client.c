@@ -1,14 +1,21 @@
 #include <stdio.h>
 #include "udp.h"
+#include <time.h>
+#include <stdlib.h>
+
+int MIN_PORT = 20000;
+int MAX_PORT = 40000;
 
 #define BUFFER_SIZE (1000)
 
 // client code
 int main(int argc, char *argv[]) {
     struct sockaddr_in addrSnd, addrRcv;
-
-    int sd = UDP_Open(20000);
-    int rc = UDP_FillSockAddr(&addrSnd, "localhost", 10000);
+    int port=atoi(argv[1]);
+    srand(time(0));
+    int port_num = (rand() % (MAX_PORT - MIN_PORT) + MIN_PORT);
+    int sd = UDP_Open(port_num);
+    int rc = UDP_FillSockAddr(&addrSnd, "localhost", port);
 
     char message[BUFFER_SIZE];
     sprintf(message, "hello world");

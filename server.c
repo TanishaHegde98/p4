@@ -3,13 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
+// #include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
 #include "udp.h"
 #include "ufs.h"
+#include "mfs.h"
+
 
 #define BUFFER_SIZE (1000)
 #define MAXLIST 10
@@ -36,7 +38,6 @@ typedef struct
 // server code
 super_t *s;
 int fd;
-
 // block functions
 
 int read_block(int blk, void *block)
@@ -63,7 +64,20 @@ int write_block(int blk, void *block){
     }
     return 0;
 }
-
+int get_inodeBLock(int inum,MFS_Stat_t *m){
+    int blk = (inum / INUM_PER_BLOCK) + s->inode_region_addr;
+    int inum_in_blk = inum % INUM_PER_BLOCK;
+    // Read blk containing inode
+    inode_block iBlock;
+    int rc=read_block(blk, (void *)&iBlock);
+    if(rc>=0){
+    m->type=iBlock.inodes[inum_in_blk].type;
+    m->size=iBlock.inodes[inum_in_blk].size;
+    return 0;
+    }
+    else 
+        return -1;
+}
 int get_datablock(int pinum, int *cur_entry, int itype)
 {
     int blk = (pinum / INUM_PER_BLOCK) + s->inode_region_addr;
@@ -162,16 +176,34 @@ int mfs_lookup(char **argList, int *argSize)
             if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
             {
                 printf("Found file %s", dEntries.entries[i].name);
-                return 0;
+                return dEntries.entries[i].inum;
             }
         }
         printf("did not find file\n");
+        return -1;
     }
-    return 0;
+    return -1;
 }
 
 int mfs_stat(char **argList, int *argSize)
 {
+    printf("MFS_STAT");
+    // if(*argSize<3)
+    // {
+    //     return -1;
+    // }
+    // else{
+    //     int inum=atoi(argList[1]);
+    //     if(inum < 0) {
+    //         // perror("server_stat: invalid inum_1");
+    //         return -1;
+    //     }
+    //     printf("Inum:%d",inum);
+    //     MFS_Stat_t *m= (MFS_Stat_t *) argList[2];
+    //     int rc=get_inodeBLock(inum,m);
+    //     return rc;
+
+    // }
     return 0;
 }
 
@@ -182,6 +214,19 @@ int mfs_write(char **argList, int *argSize)
 
 int mfs_read(char **argList, int *argSize)
 {
+    int inum,offset,nbytes;
+    if(*argSize!=4){
+        return -1;
+    }
+    else{
+        inum=atoi(argList[0]);
+        offset=atoi(argList[2]);
+        nbytes=atoi(argList[3]);
+        if(nbytes>4096){
+            return -1;
+        }
+        printf("inum:%d, offset:%d,nbytes:%d",inum,offset,nbytes);
+    }
     return 0;
 }
 
@@ -286,6 +331,55 @@ int mfs_creat(char **argList, int *argSize)
     }
     return 0;
 }
+int mfs_unlink(char **argList, int *argSize){
+    if(*argSize<3){
+        return -1;
+    }else{
+            int pinum=atoi(argList[1]);
+            char * name = argList[2];
+            printf("name:%s, pinum:%d",name,pinum);
+            if(pinum<0){
+                return 0;
+            }
+            int inum=mfs_lookup(argList,argSize);
+            if(inum==-1){
+                return -1;
+            }
+             //Logic:
+             // Check if file is a directory
+             // if dir-> check if empty?unlink:return -1;
+             //If file-> remove file from current dir
+
+            // int parentBlk = 0, cur_dir_entry = 0,i=0;
+            // dir_block_t dEntries;
+            // parentBlk = get_datablock(pinum, &cur_dir_entry, 0);
+            // if (parentBlk == -1)
+            //     return -1;
+            // int isDir=0;
+            // read_block(parentBlk, (void *)&dEntries);
+            // for (int i = 0; i < DIRECTORY_ENTRIES; i++)
+            // {
+            //     if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
+            //     {
+            //         isDir=1;
+            //         break;
+            //     }
+            // }
+
+           
+    }
+    return 0;
+}
+int mfs_shutdown(){
+    // struct sockaddr_in addr;
+    // char reply[BUFFER_SIZE];
+    // sprintf(reply, "goodbye world");
+    // int rc=UDP_Write(sd,&addr,reply,BUFFER_SIZE);
+    // printf("%s,server rc:%d",reply,rc);
+    fsync(fd);
+    exit(0);
+    // return 0;
+}
 
 // helper functions
 int parse_command(char *message, char **argList, int *argSize)
@@ -301,25 +395,84 @@ int parse_command(char *message, char **argList, int *argSize)
     return 0;
 }
 
-int execCommand(char **argList, int *argSize)
+int execCommand(char **argList, int *argSize,int sd,struct sockaddr_in *addr)
 {
     int cmdCode = atoi(argList[0]);
+    int result=-2,rc=-1;
+    char res[BUFFER_SIZE]={0};
+    char str_int[10];
     switch (cmdCode)
     {
     case 1:
-        mfs_lookup(argList, argSize);
+        result=mfs_lookup(argList, argSize);
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        printf("\nRes:%s",res);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","\nCommand executed!");
+            printf("\nResult:%d",result);
+        }
         break;
     case 2:
-        mfs_stat(argList, argSize);
+        result=mfs_stat(argList, argSize);
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","Command executed!");
+            printf("Result:%d",result);
+        }
         break;
     case 3:
-        mfs_write(argList, argSize);
+        result=mfs_write(argList, argSize);
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","Command executed!");
+            printf("Result:%d",result);
+        }
         break;
     case 4:
-        mfs_read(argList, argSize);
+        result=mfs_read(argList, argSize);
         break;
     case 5:
-        mfs_creat(argList, argSize);
+        result=mfs_creat(argList, argSize);
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        printf("\nRes:%s",res);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","Command executed!");
+            printf("Result:%d",result);
+        }
+        break;
+    case 6:
+        result=mfs_unlink(argList, argSize);
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","Command executed!");
+            printf("Result:%d",result);
+        }
+        break;
+    case 7:
+        result=mfs_shutdown();
+        sprintf(str_int,"%d",result);
+        strcat(res,str_int);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        if(rc>=0)
+        {
+            printf("%s","Command executed!");
+            printf("Result:%d",result);
+        }
         break;
     default:
         perror("command not found");
@@ -377,11 +530,11 @@ int main(int argc, char *argv[])
         if (rc > 0)
         {
             parse_command(message, argList, &argSize);
-            execCommand(argList, &argSize);
+            execCommand(argList, &argSize,sd,&addr);
             char reply[BUFFER_SIZE];
-            sprintf(reply, "goodbye world");
+            sprintf(reply, "\nExecuted");
             rc = UDP_Write(sd, &addr, reply, BUFFER_SIZE);
-            printf("server:: reply\n");
+            printf("\nIn while server:: reply%s\n rc %d",reply,rc);
             freeAllArgs(argList,&argSize);
         }
     }
