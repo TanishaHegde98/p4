@@ -1,2 +1,10 @@
 *.o
 *.out
+*.so
+server
+main
+udp
+client
+mkfs
+*.log
+*.img
