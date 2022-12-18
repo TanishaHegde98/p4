@@ -1,29 +1,19 @@
-CC     := gcc
-CFLAGS := -Wall -Werror 
+CC   = gcc
+OPTS = -Wall
 
-SRCS   := client.c \
-	server.c main.c
+all: server lib client
 
-OBJS   := ${SRCS:c=o}
-PROGS  := ${SRCS:.c=}
+server: server.o udp.o
+	$(CC) -o server server.o udp.c libmfs.c
 
-.PHONY: all
-sharedlib: libmfs.so libmfs.o ${PROG}
+client: main.o udp.o
+	$(CC) -o main main.o udp.c libmfs.c
 
-all: ${PROGS}
+lib: libmfs.o
+	$(CC) -Wall -Werror -shared -fPIC -g -o libmfs.so libmfs.c udp.o
+	export LD_LIBRARY_PATH=.:$LD_LIBRARY_PATH
 
-${PROGS} : % : %.o Makefile
-	${CC} $< -o $@ udp.c libmfs.c
+#bash ./checkEnv.sh
 
 clean:
-	rm -f ${PROGS} ${OBJS}
-
-
-%.o: %.c Makefile
-	${CC} ${CFLAGS} -c $<
-
-libmfs.so: libmfs.o
-	gcc -shared -Wl,-soname,libmfs.so -o libmfs.so libmfs.o -lc	
-
-libmfs.o: libmfs.c
-	gcc -fPIC -g -c -Wall libmfs.c
+	rm -f server.o main.o udp.o libmfs.so server client lib
