@@ -40,6 +40,12 @@ super_t *s;
 int fd;
 // block functions
 
+int read_block_from(int blk, void*block,int off, int nbytes){
+    off_t offset = off;
+    lseek(fd, offset, SEEK_SET);
+    int size = read(fd, block, nbytes);
+    return 0;
+}
 int read_block(int blk, void *block)
 {
 
@@ -53,6 +59,14 @@ int read_block(int blk, void *block)
     return 0;
 }
 
+int write_block_from(int blk, void*block,int off, int nbytes){
+    off_t offset = off;
+    lseek(fd,offset,SEEK_SET);
+    int size = write(fd, block, nbytes);
+    fsync(fd);
+    return 0;
+}
+
 int write_block(int blk, void *block){
     off_t offset = blk * UFS_BLOCK_SIZE;
     lseek(fd,offset,SEEK_SET);
@@ -60,8 +74,19 @@ int write_block(int blk, void *block){
     fsync(fd);
     if (size != UFS_BLOCK_SIZE)
     {
-        printf("Failed to read entire block");
+        return -1;
     }
+    return 0;
+}
+
+int reclaim_block(int addr, int blockNum){
+    bitmap_t bitmap;
+    read_block(addr, (void *)&bitmap);
+    int byte = blockNum / 32;
+    int bit = blockNum % 32;
+    int mask = 0x80000000>> bit;
+    bitmap.bits[byte] ^= mask;
+    write_block(addr, (void *)&bitmap);
     return 0;
 }
 int get_inodeBLock(int inum,MFS_Stat_t *m){
@@ -88,18 +113,13 @@ int get_datablock(int pinum, int *cur_entry, int itype)
     // Read blk containing inode
     inode_block iBlock;
     read_block(blk, (void *)&iBlock);
-    //printf("pinum_in_blk %d\n", pinum_in_blk);
-
     for (int i = *cur_entry; i < DIRECT_PTRS; i++)
     {
-        //printf("iBlock.inodes[pinum_in_blk].direct[i] %d\n", iBlock.inodes[pinum_in_blk].direct[i]);
-
-        // if inode is not of desired type -1 if can be of either type
+       // if inode is not of desired type -1 if can be of either type
         if (itype != -1 && iBlock.inodes[pinum_in_blk].type != itype)
             return -1;
         if (iBlock.inodes[pinum_in_blk].direct[i] == -1)
             return -1;
-        //printf("Found datablock");
         dataBlk = iBlock.inodes[pinum_in_blk].direct[i];
         *cur_entry = i+1;
         return dataBlk;
@@ -129,8 +149,6 @@ int get_free_bitmap(int blk){
                     // to data bitmap block, and return block number.
                     bitmap.bits[byte] |= mask;
                     write_block(blk, (void *)&bitmap);
-                    //printf("\nbyte: %d, bits: %d\n",byte,bit);
-
                     return (byte * 1024) + bit;
                 }
             }
@@ -138,16 +156,6 @@ int get_free_bitmap(int blk){
     }
     return -1;
 }
-
-// int get_free_block()
-// {
-
-//     // check data bit map
-//     // change the bit
-
-//     }
-//     return -1; // disk full
-// }
 
 // mfs Code
 int mfs_lookup(char **argList, int *argSize)
@@ -160,26 +168,20 @@ int mfs_lookup(char **argList, int *argSize)
     int dataBlk = 0, cur_dir_entry = 0;
     char *name = argList[2];
     dir_block_t dEntries;
-    //printf("pinum in mfs_lookup: %d\n",pinum);
     while (1)
     {
         dataBlk = get_datablock(pinum, &cur_dir_entry, 0);
-        //printf("dataBlk: %d\n",dataBlk);
         if (dataBlk == -1)
             return -1;
         read_block(dataBlk, (void *)&dEntries);
         for (int i = 0; i < 128; i++)
-        {  // if (dEntries.entries[i].inum != -1){
-        //         printf("dEntries.entries[i].name: %s\n",dEntries.entries[i].name);
-        //         printf("dEntries.entries[i].inum  %d\n",dEntries.entries[i].inum );
-        //     }
+        {  
             if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
             {
-                printf("Found file %s", dEntries.entries[i].name);
                 return dEntries.entries[i].inum;
             }
         }
-        printf("did not find file\n");
+        printf("Did not find file\n");
         return -1;
     }
     return -1;
@@ -187,21 +189,18 @@ int mfs_lookup(char **argList, int *argSize)
 
 int mfs_stat(char **argList, int *argSize)
 {
-    printf("MFS_STAT");
-    // if(*argSize<3)
-    // {
-    //     return -1;
-    // }
-    // else{
-    //     int inum=atoi(argList[1]);
-    //     if(inum < 0) {
-    //         // perror("server_stat: invalid inum_1");
-    //         return -1;
-    //     }
-    //     printf("Inum:%d",inum);
-    //     MFS_Stat_t *m= (MFS_Stat_t *) argList[2];
-    //     int rc=get_inodeBLock(inum,m);
-    //     return rc;
+    if(*argSize<1)
+    {
+        return -1;
+    }
+    int inum = atoi(argList[1]);
+    MFS_Stat_t *m = (MFS_Stat_t *)argList[2];
+    int rc = get_inodeBLock(inum, m);
+    printf("*****\nStat Function: \n");
+    printf("type:%d ",m->type);
+    printf("size:%d\n",m->size);
+    argList[2] = (char *)m;
+    return rc;
 
     // }
     return 0;
@@ -209,7 +208,19 @@ int mfs_stat(char **argList, int *argSize)
 
 int mfs_write(char **argList, int *argSize)
 {
-    return 0;
+    int inum,offset,nbytes;
+    if(*argSize!=4){
+        return -1;
+    }
+    char *buffer = argList[1];
+    MFS_Stat_t stat;
+    int dblk= get_inodeBLock(inum,&stat);
+    offset=atoi(argList[2]);
+    nbytes=atoi(argList[3]);
+    if(offset % sizeof(dir_ent_t)!=0)
+        return -1;
+    write_block_from(dblk,(void *)buffer,offset,nbytes);
+    return -1;
 }
 
 int mfs_read(char **argList, int *argSize)
@@ -218,14 +229,19 @@ int mfs_read(char **argList, int *argSize)
     if(*argSize!=4){
         return -1;
     }
+    if(offset % sizeof(dir_ent_t)!=0)
+        return -1;
     else{
         inum=atoi(argList[0]);
         offset=atoi(argList[2]);
         nbytes=atoi(argList[3]);
-        if(nbytes>4096){
+        char *buffer = argList[1];
+        MFS_Stat_t stat;
+        get_inodeBLock(inum,&stat);
+        if(stat.size < nbytes)
             return -1;
-        }
-        printf("inum:%d, offset:%d,nbytes:%d",inum,offset,nbytes);
+        int dblk =get_datablock(inum,0,-1);
+        read_block_from(dblk,(void *)buffer,offset,nbytes);
     }
     return 0;
 }
@@ -236,8 +252,12 @@ int mfs_creat(char **argList, int *argSize)
         return -1;
 
     int pinum = atoi(argList[1]);
-    //printf("pinum in mfs_create: %d\n",pinum);
     int type = atoi(argList[2]);
+    // check if inode is of type directory
+    MFS_Stat_t stats;
+    get_inodeBLock(pinum,&stats);
+    if (stats.type == 1)
+        return -1;
     int parentBlk = 0, cur_dir_entry = 0,i=0;
     char *name = argList[3];
     dir_block_t dEntries;
@@ -252,7 +272,6 @@ int mfs_creat(char **argList, int *argSize)
         {
             if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
             {
-                //printf("Creat Found file %s", dEntries.entries[i].name);
                 return 0;
             }
         }
@@ -260,14 +279,10 @@ int mfs_creat(char **argList, int *argSize)
         if (strlen(name) > MAX_FNAME)
             return -1;
 
-        //TODO: usage of bitmap length
-        printf("parent block: %d\n",parentBlk);
         int new_blk_num = get_free_bitmap(s->data_bitmap_addr);
         new_blk_num += s->data_region_addr;
-        printf("new_blk_num: %d",new_blk_num);
         // get inode number
         int newInode = get_free_bitmap(s->inode_bitmap_addr);
-        printf("\nNew Inode num: %d",newInode);
         //update current directory
         for (i = 0; i < DIRECTORY_ENTRIES; i++)
         {
@@ -276,13 +291,11 @@ int mfs_creat(char **argList, int *argSize)
             dEntries.entries[i].inum = newInode;
             strcpy(dEntries.entries[i].name,name);
             write_block(parentBlk,(void *)&dEntries);
-            printf("dEntries.entries[i].name: %s\n",dEntries.entries[i].name);
             break;
         }
         
         if(i==DIRECTORY_ENTRIES)
         {
-            printf("Directory full");
             return -1;
         }
 
@@ -305,18 +318,11 @@ int mfs_creat(char **argList, int *argSize)
             newDblk.entries[1].inum = pinum;
             for (int j = 2; j < 128; j++){
 	            newDblk.entries[j].inum = -1;
-                //printf("newDblk.entries[j].inum: %d\n",newDblk.entries[j].inum);
             }
             write_block(new_blk_num,(void *)&newDblk);
 
             dir_block_t temp;
             read_block(5,(void *)&temp);
-            //for(int j=0; j<128; j++){
-            // if (temp.entries[j].inum != -1){
-            //      //printf("temp.entries[i].name: %s\n",temp.entries[j].name);
-            //      printf("temp.entries[i].inum  %d\n",temp.entries[j].inum );
-            //     }
-            // }
             return 0;
         }
         else{
@@ -324,9 +330,6 @@ int mfs_creat(char **argList, int *argSize)
             write_block(s->inode_bitmap_addr,(void *)&itable);
             return 0;
         }
-
-        // re read whole directory entries
-        
         return 0;
     }
     return 0;
@@ -336,49 +339,53 @@ int mfs_unlink(char **argList, int *argSize){
         return -1;
     }else{
             int pinum=atoi(argList[1]);
-            char * name = argList[2];
-            printf("name:%s, pinum:%d",name,pinum);
+            char *name = argList[2];
             if(pinum<0){
-                return 0;
+                return -1;
             }
             int inum=mfs_lookup(argList,argSize);
             if(inum==-1){
                 return -1;
             }
-             //Logic:
-             // Check if file is a directory
-             // if dir-> check if empty?unlink:return -1;
-             //If file-> remove file from current dir
+        MFS_Stat_t stat;
+        dir_block_t dEntries;
+        int cur_dir_entry,dataBlk;
+        get_inodeBLock(inum,&stat);
+        printf("Inode num%d\n",inum);
+        cur_dir_entry = 0;
+        dataBlk = get_datablock(inum,&cur_dir_entry,-1);
+        if(stat.type == 0){
+            read_block(dataBlk, (void *)&dEntries);
+            for (int i = 2; i < 128; i++)
+            {  
+                if ((dEntries.entries[i].inum != -1))
+                {
+                printf("Dir not empty\n");
+                return -1;
+                }
+            }
+        //If Directory Empty reclain block
+        }
+        reclaim_block(s->data_bitmap_addr, dataBlk);
+        reclaim_block(s->inode_bitmap_addr,inum);
 
-            // int parentBlk = 0, cur_dir_entry = 0,i=0;
-            // dir_block_t dEntries;
-            // parentBlk = get_datablock(pinum, &cur_dir_entry, 0);
-            // if (parentBlk == -1)
-            //     return -1;
-            // int isDir=0;
-            // read_block(parentBlk, (void *)&dEntries);
-            // for (int i = 0; i < DIRECTORY_ENTRIES; i++)
-            // {
-            //     if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
-            //     {
-            //         isDir=1;
-            //         break;
-            //     }
-            // }
-
-           
+        dataBlk = get_datablock(pinum,&cur_dir_entry,0);
+        read_block(dataBlk, (void *)&dEntries);
+        for (int i = 0; i < 128; i++)
+        {  
+            if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
+            {
+                dEntries.entries[i].inum=-1;
+                memcpy(dEntries.entries[i].name,"\0",sizeof("\0"));
+                break;
+            }
+        }
     }
     return 0;
 }
 int mfs_shutdown(){
-    // struct sockaddr_in addr;
-    // char reply[BUFFER_SIZE];
-    // sprintf(reply, "goodbye world");
-    // int rc=UDP_Write(sd,&addr,reply,BUFFER_SIZE);
-    // printf("%s,server rc:%d",reply,rc);
     fsync(fd);
     exit(0);
-    // return 0;
 }
 
 // helper functions
@@ -407,72 +414,47 @@ int execCommand(char **argList, int *argSize,int sd,struct sockaddr_in *addr)
         result=mfs_lookup(argList, argSize);
         sprintf(str_int,"%d",result);
         strcat(res,str_int);
-        printf("\nRes:%s",res);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","\nCommand executed!");
-            printf("\nResult:%d",result);
-        }
         break;
     case 2:
         result=mfs_stat(argList, argSize);
-        sprintf(str_int,"%d",result);
-        strcat(res,str_int);
+        MFS_Stat_t *m = (MFS_Stat_t *)argList[2];
+        printf("m->type %d m->size %d", m->type,m->size);
+        sprintf(str_int,"%d",m->type);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","Command executed!");
-            printf("Result:%d",result);
-        }
+        strcat(res,str_int);
+        sprintf(str_int,"%d",m->size);
+        strcpy(res,str_int);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
         break;
     case 3:
         result=mfs_write(argList, argSize);
         sprintf(str_int,"%d",result);
         strcat(res,str_int);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","Command executed!");
-            printf("Result:%d",result);
-        }
         break;
     case 4:
-        result=mfs_read(argList, argSize);
+        mfs_read(argList, argSize);
+        memcpy(res,argList[2],BUFFER_SIZE);
+        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
         break;
     case 5:
         result=mfs_creat(argList, argSize);
         sprintf(str_int,"%d",result);
         strcat(res,str_int);
-        printf("\nRes:%s",res);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","Command executed!");
-            printf("Result:%d",result);
-        }
         break;
     case 6:
         result=mfs_unlink(argList, argSize);
         sprintf(str_int,"%d",result);
         strcat(res,str_int);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","Command executed!");
-            printf("Result:%d",result);
-        }
         break;
     case 7:
         result=mfs_shutdown();
         sprintf(str_int,"%d",result);
         strcat(res,str_int);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
-        if(rc>=0)
-        {
-            printf("%s","Command executed!");
-            printf("Result:%d",result);
-        }
         break;
     default:
         perror("command not found");
@@ -524,17 +506,11 @@ int main(int argc, char *argv[])
     {
         struct sockaddr_in addr;
         char message[BUFFER_SIZE];
-        printf("server:: waiting...\n");
         int rc = UDP_Read(sd, &addr, message, BUFFER_SIZE);
-        printf("server:: read message [size:%d contents:(%s)]\n", rc, message);
         if (rc > 0)
         {
             parse_command(message, argList, &argSize);
             execCommand(argList, &argSize,sd,&addr);
-            char reply[BUFFER_SIZE];
-            sprintf(reply, "\nExecuted");
-            rc = UDP_Write(sd, &addr, reply, BUFFER_SIZE);
-            printf("\nIn while server:: reply%s\n rc %d",reply,rc);
             freeAllArgs(argList,&argSize);
         }
     }
