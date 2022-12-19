@@ -65,8 +65,6 @@ int write_block_from(int blk, void*block,int off, int nbytes){
     off_t offset = blk*UFS_BLOCK_SIZE;
     printf("offset %ld\n",offset);
     lseek(fd,offset,SEEK_SET);
-    //int fd2 = fd;
-    //lseek(fd2,off,SEEK_SET);
     int size = write(fd, block, nbytes);
     fsync(fd);
     return 0;
@@ -219,14 +217,16 @@ int mfs_write(char **argList, int *argSize)
         return -1;
     }
     inum = atoi(argList[1]);
+    if( inum < 0 || inum > 128)
+        return -1;
     char buffer[4096];
-    memcpy(buffer,argList[2],4096);
-    printf("buffer has %s\n",buffer);
     MFS_Stat_t stat;
     int dblk=get_inodeBLock(inum,&stat);
     printf("data block of file: %d\n", dblk);
     offset=atoi(argList[3]);
     nbytes=atoi(argList[4]); 
+    memcpy(buffer,argList[2],nbytes);
+    printf("buffer has %s\n",buffer);
     printf("n bytes %d", nbytes);
     // if(offset >= 30*4096)
     //     return -1;
@@ -245,26 +245,23 @@ int mfs_write(char **argList, int *argSize)
     return 0;
 }
 
-int mfs_read(char **argList, int *argSize)
+int mfs_read(char **argList, int *argSize, char* buffer)
 {
+    //printf("\n*****in read******\n");
     int inum,offset,nbytes;
-    if(*argSize!=4){
-        return -1;
-    }
-    if(offset % sizeof(dir_ent_t)!=0)
-        return -1;
-    else{
-        inum=atoi(argList[0]);
+        inum=atoi(argList[1]);
         offset=atoi(argList[2]);
         nbytes=atoi(argList[3]);
-        char *buffer = argList[1];
         MFS_Stat_t stat;
         get_inodeBLock(inum,&stat);
         if(stat.size < nbytes)
             return -1;
-        int dblk =get_datablock(inum,0,-1);
+        int cur_dir = 0;
+        int dblk =get_datablock(inum,&cur_dir,-1);
+
+        //printf("data block in read: %d\n",dblk);
         read_block_from(dblk,(void *)buffer,offset,nbytes);
-    }
+       // memcpy(argList[1],buffer,nbytes);
     return 0;
 }
 
@@ -325,7 +322,7 @@ int mfs_creat(char **argList, int *argSize)
         inode_block itable;
         read_block(s->inode_region_addr,(void *)&itable);
         itable.inodes[newInode].type = type;
-        printf("\nitable.inodes[newInode].type %d\n",itable.inodes[newInode].type);
+        //printf("\nitable.inodes[newInode].type %d\n",itable.inodes[newInode].type);
         itable.inodes[newInode].direct[0] = new_blk_num;
         for (int j=1; j < DIRECT_PTRS; j++){
             itable.inodes[newInode].direct[j] = -1;
@@ -371,7 +368,7 @@ int mfs_unlink(char **argList, int *argSize){
         dir_block_t dEntries;
         int cur_dir_entry,dataBlk;
         get_inodeBLock(inum,&stat);
-        printf("Inode num%d\n",inum);
+        //printf("Inode num%d\n",inum);
         cur_dir_entry = 0;
         
         if(stat.type == 0){
@@ -381,7 +378,7 @@ int mfs_unlink(char **argList, int *argSize){
             {  
                 if ((dEntries.entries[i].inum != -1))
                 {
-                printf("Dir not empty\n");
+                //printf("Dir not empty\n");
                 return -1;
                 }
             }
@@ -396,7 +393,7 @@ int mfs_unlink(char **argList, int *argSize){
         {  
             if ((dEntries.entries[i].inum != -1) && (strcmp(dEntries.entries[i].name, name) == 0))
             {
-                printf("found file in unlink\n");
+                //printf("found file in unlink\n");
                 dEntries.entries[i].inum=-1;
                 dEntries.entries[i].name[0] = '\0';
                 write_block(dataBlk,(void *)&dEntries);
@@ -442,14 +439,14 @@ int execCommand(char **argList, int *argSize,int sd,struct sockaddr_in *addr)
     case 2:
         result=mfs_stat(argList, argSize);
         MFS_Stat_t *m = (MFS_Stat_t *)argList[2];
-        printf("m->type %d m->size %d", m->type,m->size);
+        //printf("m->type %d m->size %d", m->type,m->size);
         sprintf(str_int,"%d",m->type);
-        printf("sprintf %s",str_int);
+        //printf("sprintf %s",str_int);
         strcat(res,str_int);
         strcat(res,":");
         sprintf(str_int,"%d",m->size);
         strcat(res,str_int);
-        printf("res: %s",res);
+        //printf("res: %s",res);
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
         break;
     case 3:
@@ -459,9 +456,10 @@ int execCommand(char **argList, int *argSize,int sd,struct sockaddr_in *addr)
         rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
         break;
     case 4:
-        mfs_read(argList, argSize);
-        memcpy(res,argList[2],BUFFER_SIZE);
-        rc=UDP_Write(sd,addr,res,BUFFER_SIZE);
+        char buff[4096];
+        mfs_read(argList, argSize,buff);
+        printf("buffer: %s\n",buff);
+        rc=UDP_Write(sd,addr,buff,4096);
         break;
     case 5:
         result=mfs_creat(argList, argSize);

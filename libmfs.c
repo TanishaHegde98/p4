@@ -16,6 +16,10 @@
 #define MFS_UNLINK "6"
 #define MFS_SHUTDOWN "7"
 
+    typedef struct {
+	unsigned char command[BUFFER_SIZE];
+    char data[4096];
+    } block_t;
 int sd;
 struct sockaddr_in addrSnd, addrRcv;
 int MFS_Init(char *hostname, int port)
@@ -101,19 +105,19 @@ int MFS_Stat(int inum, MFS_Stat_t *m)
     strtok(buf, ":");
     m->type = atoi(OP[0]);
     m->size = atoi(OP[1]);
-    printf("Libmfs: \n");
-    printf("type:%d", m->type);
-    printf("size:%d\n", m->size);
+   // printf("Libmfs: \n");
+    //printf("type:%d", m->type);
+   // printf("size:%d\n", m->size);
     return 0;
 }
 
 int MFS_Write(int inum, char *buffer, int offset, int nbytes)
 {
-    char command[6000] = {0};
-    char received[6000];
+    char command[8000] = {0};
+    char received[BUFFER_SIZE];
     char str_int[10];
 
-    printf("libmfs rcv: %s\n",buffer);
+    //printf("libmfs rcv: %s\n",buffer);
     strcat(command, MFS_WRITE);
     strcat(command, ":");
     sprintf(str_int, "%d", inum);
@@ -126,8 +130,7 @@ int MFS_Write(int inum, char *buffer, int offset, int nbytes)
     strcat(command, ":");
     sprintf(str_int, "%d", nbytes);
     strcat(command, str_int);
-
-    int rc = UDP_Write(sd, &addrSnd, command, BUFFER_SIZE);
+    int rc = UDP_Write(sd, &addrSnd, (char *)command,6000 );
     if (rc < 0)
     {
         printf("client:: failed to send\n");
@@ -140,7 +143,7 @@ int MFS_Write(int inum, char *buffer, int offset, int nbytes)
 int MFS_Read(int inum, char *buffer, int offset, int nbytes)
 {
     char command[BUFFER_SIZE] = {0};
-    char received[BUFFER_SIZE];
+    char received[8000]={0};
     char str_int[10];
 
     strcat(command, MFS_READ);
@@ -154,17 +157,16 @@ int MFS_Read(int inum, char *buffer, int offset, int nbytes)
     sprintf(str_int, "%d", nbytes);
     strcat(command, str_int);
 
-    printf("command: %s", command);
+    //printf("command: %s", command);
 
     int rc = UDP_Write(sd, &addrSnd, command, BUFFER_SIZE);
     if (rc < 0)
     {
         printf("client:: failed to send\n");
     }
-    rc = UDP_Read(sd, &addrSnd, received, BUFFER_SIZE);
-    memcpy(buffer, received, BUFFER_SIZE);
-    rc = atoi(received);
-    return rc;
+    rc = UDP_Read(sd, &addrSnd, received, 8000);
+    memcpy(buffer, received, nbytes);
+    return 0;
 }
 
 int MFS_Creat(int pinum, int type, char *name)
@@ -206,7 +208,7 @@ int MFS_Unlink(int pinum, char *name)
     strcat(command, ":");
     strcat(command, name);
 
-    printf("command: %s", command);
+    //printf("command: %s", command);
     int rc = UDP_Write(sd, &addrSnd, command, BUFFER_SIZE);
     if (rc < 0)
     {
